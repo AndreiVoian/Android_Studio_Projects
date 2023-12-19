@@ -168,32 +168,35 @@ public class CameraActivity extends AppCompatActivity {
     }
 
     private void switchCamera() {
-        if (cameraDevice != null) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
+        closeCurrentCameraSession();
 
+        isFrontCamera = !isFrontCamera;
+        updateFlashlightAndUI();
+
+        String cameraIdToOpen = isFrontCamera ? frontCameraId : backCameraId;
+        openCamera(cameraIdToOpen);
+    }
+
+    private void updateFlashlightAndUI() {
+        if (isFrontCamera) {
+            // Front camera usually doesn't have a flashlight
+            isFlashlightOn = false;
+            flashButton.setVisibility(View.GONE);
+        } else {
+            // Back camera may support a flashlight
+            flashButton.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void closeCurrentCameraSession() {
         if (cameraCaptureSession != null) {
             cameraCaptureSession.close();
             cameraCaptureSession = null;
         }
-
-        isFrontCamera = !isFrontCamera;
-
-        // Turn off the flashlight when switching to the front camera
-        if (isFrontCamera && isFlashlightOn) {
-            isFlashlightOn = false;
-            // No need to call setTorchMode as we are closing the camera device
+        if (cameraDevice != null) {
+            cameraDevice.close();
+            cameraDevice = null;
         }
-
-        // Update UI based on the camera facing
-        if (isFrontCamera) {
-            flashButton.setVisibility(View.GONE);
-        } else {
-            flashButton.setVisibility(View.VISIBLE);
-        }
-
-        openCamera(isFrontCamera ? frontCameraId : backCameraId);
     }
 
 
