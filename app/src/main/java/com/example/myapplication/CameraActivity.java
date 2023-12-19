@@ -1,6 +1,7 @@
 package com.example.myapplication;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Rect;
@@ -18,6 +19,7 @@ import android.os.HandlerThread;
 import android.util.Log;
 import android.util.Range;
 import android.util.Size;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
@@ -56,6 +58,15 @@ public class CameraActivity extends AppCompatActivity {
     private int frontCameraZoomLevel = 0;
     private CameraProperties backCameraProperties;
     private CameraProperties frontCameraProperties;
+
+    private Handler resetZoomHandler = new Handler();
+    private Runnable resetZoomRunnable = new Runnable() {
+        @Override
+        public void run() {
+            // Reset the zoom slider and update the camera zoom
+            resetZoomSlider();
+        }
+    };
 
     private void showToast(final String text) {
         runOnUiThread(new Runnable() {
@@ -96,6 +107,7 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -131,7 +143,60 @@ public class CameraActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar seekBar) {
                 // Optional implementation
             }
+
         });
+
+        // Set an OnTouchListener on the SeekBar for the long press functionality
+        zoomSeekBar.setOnTouchListener(new View.OnTouchListener() {
+            private boolean ignoreTouchEvents = false;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        // Start the handler when the user presses down
+                        ignoreTouchEvents = false;
+                        resetZoomHandler.postDelayed(() -> {
+                            resetZoomSlider();
+                            ignoreTouchEvents = true; // Start ignoring touch events after reset
+                        }, 2000); // 2000 milliseconds = 2 seconds
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (ignoreTouchEvents) {
+                            // Ignore move events if reset was performed
+                            return true;
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        // Remove the callback if the user lifts their finger before 2 seconds
+                        resetZoomHandler.removeCallbacksAndMessages(null);
+                        if (ignoreTouchEvents) {
+                            // If reset was performed, reset the flag and consume the event
+                            ignoreTouchEvents = false;
+                            zoomSeekBar.clearFocus(); // Clear focus from the seek bar
+                            zoomSeekBar.setPressed(false); // Remove the pressed state
+                            return true;
+                        } else {
+                            // Update the zoom level only if reset was not performed
+                            if (cameraDevice != null) {
+                                int progress = zoomSeekBar.getProgress();
+                                if (isFrontCamera) {
+                                    frontCameraZoomLevel = progress;
+                                } else {
+                                    backCameraZoomLevel = progress;
+                                }
+                                updateCameraZoom(progress, isFrontCamera);
+                            }
+                        }
+                        break;
+                }
+                return false; // Return false to allow the seek bar to handle the touch event too
+            }
+        });
+
+
+
 
         updateZoomSeekBarMax();
 
@@ -447,7 +512,10 @@ public class CameraActivity extends AppCompatActivity {
             e.printStackTrace();
         }
     }
-
+    private void resetZoomSlider() {
+        zoomSeekBar.setProgress(0);
+        updateCameraZoom(0, isFrontCamera);
+    }
     @Override
     protected void onPause() {
         super.onPause();
