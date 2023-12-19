@@ -54,7 +54,8 @@ public class CameraActivity extends AppCompatActivity {
     private SeekBar zoomSeekBar;
     private int backCameraZoomLevel = 0;
     private int frontCameraZoomLevel = 0;
-    private int newZoomLevel;
+    private CameraProperties backCameraProperties;
+    private CameraProperties frontCameraProperties;
 
     private void showToast(final String text) {
         runOnUiThread(new Runnable() {
@@ -94,10 +95,6 @@ public class CameraActivity extends AppCompatActivity {
             e.printStackTrace();
         }
     }
-
-
-
-
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -191,8 +188,6 @@ public class CameraActivity extends AppCompatActivity {
         zoomSeekBar.setMax(maxZoomValue - 1); // Subtracting one to ensure we don't go over the limit.
     }
 
-
-
     private void toggleFlashLight() {
         if (isFrontCamera) {
             showToast("Flashlight not available on front camera.");
@@ -203,7 +198,7 @@ public class CameraActivity extends AppCompatActivity {
         updateCameraPreviewSession();
     }
 
-    private TextureView.SurfaceTextureListener surfaceTextureListener = new TextureView.SurfaceTextureListener() {
+    private final TextureView.SurfaceTextureListener surfaceTextureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
             openCamera(isFrontCamera ? frontCameraId : backCameraId);
@@ -235,10 +230,6 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
-    private CameraProperties backCameraProperties;
-    private CameraProperties frontCameraProperties;
-
-
     private void initializeCameraProperties() {
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
@@ -262,8 +253,6 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
-
-
     private void switchCamera() {
         closeCurrentCameraSession();
         isFrontCamera = !isFrontCamera;
@@ -278,7 +267,6 @@ public class CameraActivity extends AppCompatActivity {
         String cameraIdToOpen = isFrontCamera ? frontCameraId : backCameraId;
         openCamera(cameraIdToOpen);
     }
-
 
     private void updateFlashlightAndUI() {
         if (isFrontCamera) {
@@ -301,7 +289,6 @@ public class CameraActivity extends AppCompatActivity {
             cameraDevice = null;
         }
     }
-
 
     private void openCamera(String cameraId) {
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
@@ -391,7 +378,6 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
-
     private Size chooseOptimalSize(Size[] choices, int textureViewWidth, int textureViewHeight) {
         // Sort the choices in ascending order of area
         Arrays.sort(choices, new Comparator<Size>() {
@@ -420,7 +406,6 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
-
     private void updateCameraPreviewSession() {
         if (null == cameraDevice) {
             return;
@@ -434,8 +419,6 @@ public class CameraActivity extends AppCompatActivity {
             e.printStackTrace();
         }
     }
-
-
 
     private void setUpCaptureRequestBuilder(CaptureRequest.Builder builder) {
         try {
@@ -464,7 +447,6 @@ public class CameraActivity extends AppCompatActivity {
             e.printStackTrace();
         }
     }
-
 
     @Override
     protected void onPause() {
