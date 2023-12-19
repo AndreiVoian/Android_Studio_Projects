@@ -25,7 +25,6 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.Toast;
-import android.hardware.camera2.CameraManager;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -52,7 +51,10 @@ public class CameraActivity extends AppCompatActivity {
     private boolean isFlashlightOn = false;
     private Button flashButton;
     private CameraManager cameraManager;
-
+    private SeekBar zoomSeekBar;
+    private int backCameraZoomLevel = 0;
+    private int frontCameraZoomLevel = 0;
+    private int newZoomLevel;
 
     private void showToast(final String text) {
         runOnUiThread(new Runnable() {
@@ -63,6 +65,39 @@ public class CameraActivity extends AppCompatActivity {
         });
     }
 
+    private void updateCameraZoom(int sliderValue, boolean isFrontCamera) {
+        if (this.isFrontCamera) {
+            frontCameraZoomLevel = sliderValue;
+        } else {
+            backCameraZoomLevel = sliderValue;
+        }
+        try {
+            CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraDevice.getId());
+            float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
+            Rect m = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+
+            // Assuming the sliderValue is from 0 to 100, and sliderValue of 100 should correspond to maxZoom.
+            float zoomRatio = sliderValue / 100f * (maxZoom - 1) + 1; // +1 because min zoom is 1x, not 0x.
+
+            // Here we ensure that we don't exceed the maximum zoom ratio provided by the camera.
+            zoomRatio = Math.min(zoomRatio, maxZoom);
+
+            int cropW = (int) (m.width() / zoomRatio);
+            int cropH = (int) (m.height() / zoomRatio);
+            int cropX = (m.width() - cropW) / 2;
+            int cropY = (m.height() - cropH) / 2;
+
+            Rect zoom = new Rect(cropX, cropY, cropX + cropW, cropY + cropH);
+            captureRequestBuilder.set(CaptureRequest.SCALER_CROP_REGION, zoom);
+            cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,8 +106,37 @@ public class CameraActivity extends AppCompatActivity {
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
+        initializeCameraProperties();
+
         textureView = findViewById(R.id.textureView);
         textureView.setSurfaceTextureListener(surfaceTextureListener);
+
+        zoomSeekBar = findViewById(R.id.zoom_seekbar);
+        zoomSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (cameraDevice != null && fromUser) {
+                    if (isFrontCamera) {
+                        frontCameraZoomLevel = progress;
+                    } else {
+                        backCameraZoomLevel = progress;
+                    }
+                    updateCameraZoom(progress, isFrontCamera);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                // Optional implementation
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                // Optional implementation
+            }
+        });
+
+        updateZoomSeekBarMax();
 
         exposureSeekBar = findViewById(R.id.exposure_seekbar);
         exposureSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -113,8 +177,21 @@ public class CameraActivity extends AppCompatActivity {
             }
         });
 
-        initializeCameraIds();
     }
+
+    private void updateZoomSeekBarMax() {
+        int maxZoomValue;
+        if (isFrontCamera && frontCameraProperties != null) {
+            maxZoomValue = (int) (frontCameraProperties.maxDigitalZoom * 10); // Assuming 10 is the scaling factor.
+        } else if (!isFrontCamera && backCameraProperties != null) {
+            maxZoomValue = (int) (backCameraProperties.maxDigitalZoom * 10); // Assuming 10 is the scaling factor.
+        } else {
+            maxZoomValue = 100; // Default value if camera properties are not available
+        }
+        zoomSeekBar.setMax(maxZoomValue - 1); // Subtracting one to ensure we don't go over the limit.
+    }
+
+
 
     private void toggleFlashLight() {
         if (isFrontCamera) {
@@ -148,17 +225,35 @@ public class CameraActivity extends AppCompatActivity {
         }
     };
 
-    private void initializeCameraIds() {
+    class CameraProperties {
+        float maxDigitalZoom;
+        // Add other properties here as needed
+
+        // Constructor
+        CameraProperties(float maxDigitalZoom) {
+            this.maxDigitalZoom = maxDigitalZoom;
+        }
+    }
+
+    private CameraProperties backCameraProperties;
+    private CameraProperties frontCameraProperties;
+
+
+    private void initializeCameraProperties() {
         CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         try {
             for (String cameraId : cameraManager.getCameraIdList()) {
                 CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
                 Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                float maxZoomRatio = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+
                 if (facing != null) {
-                    if (facing == CameraCharacteristics.LENS_FACING_BACK && backCameraId == null) {
+                    if (facing == CameraCharacteristics.LENS_FACING_BACK) {
                         backCameraId = cameraId;
-                    } else if (facing == CameraCharacteristics.LENS_FACING_FRONT && frontCameraId == null) {
+                        backCameraProperties = new CameraProperties(maxZoomRatio);
+                    } else if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
                         frontCameraId = cameraId;
+                        frontCameraProperties = new CameraProperties(maxZoomRatio);
                     }
                 }
             }
@@ -167,15 +262,23 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
 
+
+
     private void switchCamera() {
         closeCurrentCameraSession();
-
         isFrontCamera = !isFrontCamera;
+
         updateFlashlightAndUI();
+        updateZoomSeekBarMax();
+
+        // Update the slider to reflect the current zoom level of the active camera
+        int currentZoomLevel = isFrontCamera ? frontCameraZoomLevel : backCameraZoomLevel;
+        zoomSeekBar.setProgress(currentZoomLevel);
 
         String cameraIdToOpen = isFrontCamera ? frontCameraId : backCameraId;
         openCamera(cameraIdToOpen);
     }
+
 
     private void updateFlashlightAndUI() {
         if (isFrontCamera) {
@@ -256,6 +359,10 @@ public class CameraActivity extends AppCompatActivity {
                                         if (cameraDevice == null) return;
                                         CameraActivity.this.cameraCaptureSession = cameraCaptureSession;
                                         updateCameraPreviewSession();
+                                        // Determine the current zoom level based on the active camera
+                                        int currentZoomLevel = isFrontCamera ? frontCameraZoomLevel : backCameraZoomLevel;
+                                        // Apply the current zoom level
+                                        updateCameraZoom(currentZoomLevel, isFrontCamera);
                                     }
 
                                     @Override
