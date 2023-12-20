@@ -19,13 +19,11 @@ import android.os.HandlerThread;
 import android.util.Log;
 import android.util.Range;
 import android.util.Size;
-import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.SeekBar;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -44,8 +42,6 @@ public class CameraActivity extends AppCompatActivity {
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraCaptureSession;
     private CaptureRequest.Builder captureRequestBuilder;
-    private SeekBar exposureSeekBar;
-    private int exposureValue = 50; // Initial value for exposure
     private String backCameraId = null;
     private String frontCameraId = null;
     private boolean isFrontCamera = false; // Flag to track which camera is currently active
@@ -53,36 +49,46 @@ public class CameraActivity extends AppCompatActivity {
     private boolean isFlashlightOn = false;
     private Button flashButton;
     private CameraManager cameraManager;
-    private SeekBar zoomSeekBar;
-    private int backCameraZoomLevel = 0;
-    private int frontCameraZoomLevel = 0;
+
+    private SliderManager zoomSliderManager;
+    private SliderManager exposureSliderManager;
+    private boolean isSwitchingCamera = false;
+
     private CameraProperties backCameraProperties;
     private CameraProperties frontCameraProperties;
 
-    private Handler resetZoomHandler = new Handler();
-    private Runnable resetZoomRunnable = new Runnable() {
-        @Override
-        public void run() {
-            // Reset the zoom slider and update the camera zoom
-            resetZoomSlider();
-        }
-    };
-
     private void showToast(final String text) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(CameraActivity.this, text, Toast.LENGTH_SHORT).show();
+        runOnUiThread(() -> Toast.makeText(CameraActivity.this, text, Toast.LENGTH_SHORT).show());
+    }
+    private void updateExposureCompensation(int sliderValue) {
+        try {
+            // Get the range of exposure compensation
+            Range<Integer> exposureCompensationRange = cameraManager.getCameraCharacteristics(cameraDevice.getId())
+                    .get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+
+            if (exposureCompensationRange == null) {
+                Log.e("CameraActivity", "Exposure compensation range is null");
+                return;
             }
-        });
+
+            // Scale the slider value to the exposure compensation range
+            int minExposureCompensation = exposureCompensationRange.getLower();
+            int maxExposureCompensation = exposureCompensationRange.getUpper();
+            int scaledValue = (int) (minExposureCompensation + ((maxExposureCompensation - minExposureCompensation) * (sliderValue / 100f)));
+
+            // Set the scaled value to the capture request builder
+            captureRequestBuilder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, scaledValue);
+
+            // Apply the changes to the camera capture session
+            if (cameraCaptureSession != null) {
+                cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null);
+            }
+        } catch (CameraAccessException e) {
+            Log.e("CameraActivity", "Failed to access camera for exposure compensation", e);
+        }
     }
 
-    private void updateCameraZoom(int sliderValue, boolean isFrontCamera) {
-        if (this.isFrontCamera) {
-            frontCameraZoomLevel = sliderValue;
-        } else {
-            backCameraZoomLevel = sliderValue;
-        }
+    private void updateCameraZoom(int sliderValue) {
         try {
             CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraDevice.getId());
             float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
@@ -114,143 +120,58 @@ public class CameraActivity extends AppCompatActivity {
         setContentView(R.layout.activity_camera);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-
         initializeCameraProperties();
 
         textureView = findViewById(R.id.textureView);
         textureView.setSurfaceTextureListener(surfaceTextureListener);
 
-        zoomSeekBar = findViewById(R.id.zoom_seekbar);
-        zoomSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (cameraDevice != null && fromUser) {
-                    if (isFrontCamera) {
-                        frontCameraZoomLevel = progress;
-                    } else {
-                        backCameraZoomLevel = progress;
-                    }
-                    updateCameraZoom(progress, isFrontCamera);
-                }
-            }
+        // Initialize zoom slider manager
+        zoomSliderManager = new SliderManager(
+                findViewById(R.id.zoom_seekbar),
+                0, // Default zoom value
+                this::handleSliderChange // Implementing SliderChangeListener
+        );
 
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-                // Optional implementation
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                // Optional implementation
-            }
-
-        });
-
-        // Set an OnTouchListener on the SeekBar for the long press functionality
-        zoomSeekBar.setOnTouchListener(new View.OnTouchListener() {
-            private boolean ignoreTouchEvents = false;
-
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        // Start the handler when the user presses down
-                        ignoreTouchEvents = false;
-                        resetZoomHandler.postDelayed(() -> {
-                            resetZoomSlider();
-                            ignoreTouchEvents = true; // Start ignoring touch events after reset
-                        }, 2000); // 2000 milliseconds = 2 seconds
-                        break;
-                    case MotionEvent.ACTION_MOVE:
-                        if (ignoreTouchEvents) {
-                            // Ignore move events if reset was performed
-                            return true;
-                        }
-                        break;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        // Remove the callback if the user lifts their finger before 2 seconds
-                        resetZoomHandler.removeCallbacksAndMessages(null);
-                        if (ignoreTouchEvents) {
-                            // If reset was performed, reset the flag and consume the event
-                            ignoreTouchEvents = false;
-                            zoomSeekBar.clearFocus(); // Clear focus from the seek bar
-                            zoomSeekBar.setPressed(false); // Remove the pressed state
-                            return true;
-                        } else {
-                            // Update the zoom level only if reset was not performed
-                            if (cameraDevice != null) {
-                                int progress = zoomSeekBar.getProgress();
-                                if (isFrontCamera) {
-                                    frontCameraZoomLevel = progress;
-                                } else {
-                                    backCameraZoomLevel = progress;
-                                }
-                                updateCameraZoom(progress, isFrontCamera);
-                            }
-                        }
-                        break;
-                }
-                return false; // Return false to allow the seek bar to handle the touch event too
-            }
-        });
-
-
-
+// Initialize exposure slider manager
+        exposureSliderManager = new SliderManager(
+                findViewById(R.id.exposure_seekbar),
+                50, // Default exposure value
+                this::handleSliderChange // Implementing SliderChangeListener
+        );
 
         updateZoomSeekBarMax();
 
-        exposureSeekBar = findViewById(R.id.exposure_seekbar);
-        exposureSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                exposureValue = progress;
-                updateCameraPreviewSession();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-                // Optional implementation
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                // Optional implementation
-            }
-        });
-
-
         switchCameraButton = findViewById(R.id.switch_camera_button);
-        switchCameraButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                switchCamera();
-            }
-        });
+        switchCameraButton.setOnClickListener(v -> switchCamera());
 
         flashButton = findViewById(R.id.button_flash);
         cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        flashButton.setOnClickListener(v -> toggleFlashLight());
+    }
 
-        flashButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Log.d("CameraActivity", "Flash button clicked");
-                toggleFlashLight();
+    private void handleSliderChange(int value, SliderManager.SliderType type) {
+        if (!isSwitchingCamera) {
+            if (type == SliderManager.SliderType.ZOOM) {
+                // Directly update camera zoom without storing the zoom level
+                updateCameraZoom(value);
+            } else if (type == SliderManager.SliderType.BRIGHTNESS) {
+                // Update exposure compensation
+                updateExposureCompensation(value);
             }
-        });
-
+        }
     }
 
     private void updateZoomSeekBarMax() {
         int maxZoomValue;
         if (isFrontCamera && frontCameraProperties != null) {
-            maxZoomValue = (int) (frontCameraProperties.maxDigitalZoom * 10); // Assuming 10 is the scaling factor.
+            maxZoomValue = (int) (frontCameraProperties.maxDigitalZoom * 10);
         } else if (!isFrontCamera && backCameraProperties != null) {
-            maxZoomValue = (int) (backCameraProperties.maxDigitalZoom * 10); // Assuming 10 is the scaling factor.
+            maxZoomValue = (int) (backCameraProperties.maxDigitalZoom * 10);
         } else {
-            maxZoomValue = 100; // Default value if camera properties are not available
+            maxZoomValue = 100;
         }
-        zoomSeekBar.setMax(maxZoomValue - 1); // Subtracting one to ensure we don't go over the limit.
+        // Update the maximum zoom value using SliderManager
+        zoomSliderManager.setMaxValue(maxZoomValue - 1);
     }
 
     private void toggleFlashLight() {
@@ -319,18 +240,20 @@ public class CameraActivity extends AppCompatActivity {
     }
 
     private void switchCamera() {
+        isSwitchingCamera = true;
         closeCurrentCameraSession();
         isFrontCamera = !isFrontCamera;
 
         updateFlashlightAndUI();
         updateZoomSeekBarMax();
 
-        // Update the slider to reflect the current zoom level of the active camera
-        int currentZoomLevel = isFrontCamera ? frontCameraZoomLevel : backCameraZoomLevel;
-        zoomSeekBar.setProgress(currentZoomLevel);
+        // Reset sliders to their default values when switching cameras
+        zoomSliderManager.resetSlider();
+        exposureSliderManager.resetSlider(); // Reset the exposure slider
 
         String cameraIdToOpen = isFrontCamera ? frontCameraId : backCameraId;
         openCamera(cameraIdToOpen);
+        isSwitchingCamera = false;
     }
 
     private void updateFlashlightAndUI() {
@@ -411,10 +334,9 @@ public class CameraActivity extends AppCompatActivity {
                                         if (cameraDevice == null) return;
                                         CameraActivity.this.cameraCaptureSession = cameraCaptureSession;
                                         updateCameraPreviewSession();
-                                        // Determine the current zoom level based on the active camera
-                                        int currentZoomLevel = isFrontCamera ? frontCameraZoomLevel : backCameraZoomLevel;
-                                        // Apply the current zoom level
-                                        updateCameraZoom(currentZoomLevel, isFrontCamera);
+
+                                        // Reset zoom level to default when the session is configured
+                                        zoomSliderManager.resetSlider();
                                     }
 
                                     @Override
@@ -422,6 +344,7 @@ public class CameraActivity extends AppCompatActivity {
                                         showToast("Failed to configure camera.");
                                     }
                                 }, null);
+                        isSwitchingCamera = false;
                     } catch (CameraAccessException e) {
                         e.printStackTrace();
                     }
@@ -472,16 +395,23 @@ public class CameraActivity extends AppCompatActivity {
     }
 
     private void updateCameraPreviewSession() {
-        if (null == cameraDevice) {
+        if (null == cameraDevice || isSwitchingCamera) {
+            // Skip updating the camera preview session if the camera is null or we are currently switching cameras
             return;
         }
+
         try {
+            // Set up the capture request builder with the necessary configurations
             setUpCaptureRequestBuilder(captureRequestBuilder);
+
+            // Start a new thread for handling the camera preview
             HandlerThread thread = new HandlerThread("CameraPreview");
             thread.start();
+
+            // Set the repeating request with the configured capture request
             cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, new Handler(thread.getLooper()));
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e("CameraActivity", "Failed to apply camera settings", e);
         }
     }
 
@@ -491,14 +421,6 @@ public class CameraActivity extends AppCompatActivity {
 
             // Set AE mode for both cameras
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
-
-            // Check and set exposure compensation
-            Range<Integer> exposureCompensationRange = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
-            if (exposureCompensationRange != null && exposureCompensationRange.contains(exposureValue - 50)) {
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureValue - 50);
-            } else {
-                Log.d("CameraActivity", "Exposure compensation out of range or not supported");
-            }
 
             // Handle flash mode for the back camera
             if (!isFrontCamera) {
@@ -512,10 +434,7 @@ public class CameraActivity extends AppCompatActivity {
             e.printStackTrace();
         }
     }
-    private void resetZoomSlider() {
-        zoomSeekBar.setProgress(0);
-        updateCameraZoom(0, isFrontCamera);
-    }
+
     @Override
     protected void onPause() {
         super.onPause();
